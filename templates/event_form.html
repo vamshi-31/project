@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Event Form</title>
+</head>
+<body>
+    <h1>Event Form for {{ event.name }}</h1>
+    <form action="/events/{{ event.id }}/form" method="post">
+    <label for="name">Name:</label>
+    <input type="text" id="name" name="name" required>
+
+    <label for="email">Email:</label>
+    <input type="email" id="email" name="email" required>
+
+    <label for="phoneno">Phone Number:</label>
+    <input type="text" id="phoneno" name="phoneno" required>
+
+    <label for="dropdown">Role:</label>
+    <select id="dropdown" name="dropdown" required>
+        <option value="nri">NRI</option>
+        <option value="audience">Audience</option>
+        <option value="speaker">Speaker</option>
+        <option value="delegate">Delegate</option>
+    </select>
+
+    <button type="submit">Submit</button>
+</form>
+</body>
+</html>
