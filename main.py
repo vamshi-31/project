@@ -688,6 +688,9 @@ async def submit_form(
 
     return RedirectResponse(url="/thank-you", status_code=303)
 
+@app.get("/thank-you")
+def thank_you():
+    return {"message": "Thank you for your submission!"}
 
 @app.get("/event-registrations/{event_id}", response_model=List[UserDetails])
 async def get_event_registrations(event_id: int, user_id: int = None, db: Session = Depends(get_db)):
@@ -751,3 +754,59 @@ async def get_user_event_registrations(event_id: int, user_id: int, db: Session 
         raise HTTPException(status_code=404, detail="No registrations found")
 
     return registrations
+
+def get_current_event_id(request: Request):
+    # Assume you get the event_id from the request context or session
+    # For example, using a path parameter or session variable
+    event_id = request.path_params.get("event_id")
+    if not event_id:
+        raise HTTPException(status_code=400, detail="Event ID not provided in request path")
+    return int(event_id)
+
+@app.get("/upload-image/{event_id}", response_class=HTMLResponse)
+async def upload_image_form(event_id: int, request: Request, db: Session = Depends(get_db)):
+    # Retrieve the event to validate the ID
+    event = db.query(Event).filter(Event.id == event_id).first()
+
+    if not event:
+        raise HTTPException(status_code=404, detail="Event not found")
+
+    # Render the template for image upload
+    return templates.TemplateResponse("upload_image.html", {"request": request, "event_id": event_id})
+
+@app.post("/upload-image/{event_id}")
+async def upload_image(event_id: int, file: UploadFile = File(...), db: Session = Depends(get_db)):
+    # Retrieve the event to validate the ID
+    event = db.query(Event).filter(Event.id == event_id).first()
+
+    if not event:
+        raise HTTPException(status_code=404, detail="Event not found")
+
+    existing_image = db.query(ImageModel).filter(ImageModel.event_id == event_id).first()
+
+    if existing_image:
+        # Delete the old image from the database
+        db.delete(existing_image)
+        db.commit()
+
+    file_content = await file.read()
+    image = ImageModel(event_id=event_id, filename=file.filename, data=file_content)
+
+    db.add(image)
+    db.commit()
+    db.refresh(image)
+
+    return {"filename": file.filename, "event_id": event_id}
+
+@app.get("/get-image/{event_id}")
+async def get_image(event_id: int, db: Session = Depends(get_db)):
+    # Retrieve the image associated with the event
+    image = db.query(ImageModel).filter(ImageModel.event_id == event_id).first()
+
+    if not image:
+        raise HTTPException(status_code=404, detail="Image not found for this event")
+
+    # Return the image content as a streaming response
+    return StreamingResponse(BytesIO(image.data), media_type="image/jpeg")
+
+
