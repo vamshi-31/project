@@ -1,19 +1,19 @@
-from fastapi import FastAPI, Form, Request, Depends, HTTPException, BackgroundTasks
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi import FastAPI, Form, Request, Depends, HTTPException, BackgroundTasks, UploadFile, File
+from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse
 from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
 from pydantic import BaseModel, EmailStr, constr
 from fastapi_mail import FastMail, MessageSchema, ConnectionConfig
-from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.exc import SQLAlchemyError, IntegrityError
 from starlette.middleware.sessions import SessionMiddleware
 from itsdangerous import URLSafeTimedSerializer
 from database import SessionLocal, engine
-from models import User, Event, PendingEvent, EventForm
-from schemas import UserSchema, EventFormCreate, UserDetails
+from models import User, Event, PendingEvent, EventForm, ImageModel
+from schemas import UserSchema, EventFormCreate, UserDetails, ImageCreate, ImageResponse, ImageBase
 from database import Base
 import smtplib
 import base64
-from typing import List, Any
+from typing import List, Any, Optional
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 import os
@@ -25,6 +25,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from datetime import datetime
 import qrcode
 from io import BytesIO
+import json
 
 app = FastAPI()
 
@@ -106,39 +107,18 @@ conf = ConnectionConfig(
 
 fm = FastMail(conf)
 
-import qrcode
-import json
 
-
-def generate_qr_code(user_data):
-    # Exclude specific fields from the QR code data
-    filtered_data = {key: value for key, value in user_data.items() if key not in ['id', 'event_id']}
-
-    # Convert filtered data to JSON
-    qr_data = json.dumps(filtered_data, ensure_ascii=False)
-
-    # Generate QR code
+def generate_qr_code(data: dict, file_path: str):
     qr = qrcode.QRCode(
         version=1,
         error_correction=qrcode.constants.ERROR_CORRECT_L,
         box_size=10,
         border=4,
     )
-    qr.add_data(qr_data)
+    qr.add_data(data)
     qr.make(fit=True)
     img = qr.make_image(fill='black', back_color='white')
-
-    # Define the image path using user ID
-    image_path = f"static/qr_codes/{user_data['id']}.png"
-
-    # Create directories if they don't exist
-    os.makedirs(os.path.dirname(image_path), exist_ok=True)
-
-    # Save QR code image
-    img.save(image_path)
-
-    return image_path
-
+    img.save(file_path)
 class NoBackMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
         response = await call_next(request)
@@ -151,18 +131,21 @@ class NoBackMiddleware(BaseHTTPMiddleware):
 
 app.add_middleware(NoBackMiddleware)
 
-def get_db():
+def get_db() -> Session:
     db = SessionLocal()
     try:
         yield db
     finally:
         db.close()
 
-def get_current_user(request: Request):
+def get_current_user(request: Request, db: Session) -> Optional[User]:
     user_email = request.session.get('user_email')
-    if not user_email:
-        raise HTTPException(status_code=403, detail="Not authenticated")
-    return user_email
+    if user_email is None:
+        raise HTTPException(status_code=401, detail="User not authenticated")
+    user = db.query(User).filter(User.email == user_email).first()
+    if user is None:
+        raise HTTPException(status_code=401, detail="User not found")
+    return user
 
 def get_current_admin(request: Request):
     admin = request.session.get('admin')
@@ -654,18 +637,19 @@ async def create_form(event_id: int, request: Request, db: Session = Depends(get
 
     return templates.TemplateResponse("create_form.html", {"request": request, "event_id": event_id})
 
+
 @app.post("/submit-form")
 async def submit_form(
-    request: Request,
-    event_id: int = Form(...),
-    name: str = Form(...),
-    email: str = Form(...),
-    phoneno: str = Form(...),
-    dropdown: str = Form(...),
-    db: Session = Depends(get_db)
+        request: Request,
+        event_id: int = Form(...),
+        name: str = Form(...),
+        email: str = Form(...),
+        phoneno: str = Form(...),
+        dropdown: str = Form(...),
+        db: Session = Depends(get_db)
 ):
+    # Check if the event exists
     event = db.query(Event).filter(Event.id == event_id).first()
-
     if not event:
         raise HTTPException(status_code=404, detail="Event not found")
 
@@ -675,50 +659,72 @@ async def submit_form(
         name=name,
         email=email,
         phoneno=phoneno,
-        dropdown=dropdown
+        dropdown=dropdown,
+        qr_code=None  # Initialize with None
     )
     db.add(new_form_entry)
-    db.commit()
+    db.commit()  # Commit to get the form ID
 
-    # Prepare data for QR code
+    # Prepare data for QR code generation
     user_data = {
-        'id': new_form_entry.id,
-        'event_id': event_id,
         'name': name,
         'email': email,
         'phoneno': phoneno,
         'dropdown': dropdown
     }
-    qr_code_path = generate_qr_code(user_data)
 
-    # Update the form entry with QR code path
-    new_form_entry.qr_code = qr_code_path
-    db.commit()
+    qr_code_path = f"static/qrcodes/{new_form_entry.id}.png"
+    try:
+        generate_qr_code(user_data, qr_code_path)
+
+        # Read the image file as binary
+        with open(qr_code_path, "rb") as image_file:
+            qr_code_binary = image_file.read()
+
+        # Update the form entry with QR code binary data
+        new_form_entry.qr_code = qr_code_binary
+        db.commit()  # Commit the update
+
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"Error generating QR code: {str(e)}")
 
     return RedirectResponse(url="/thank-you", status_code=303)
 
+
 @app.get("/event-registrations/{event_id}", response_model=List[UserDetails])
 async def get_event_registrations(event_id: int, user_id: int = None, db: Session = Depends(get_db)):
-    # Fetch the event
+    # Fetch the event by ID
     event = db.query(Event).filter(Event.id == event_id).first()
     if not event:
         raise HTTPException(status_code=404, detail="Event not found")
 
-    # Check user access if user_id is provided
+    # Verify user access, if `user_id` is provided
     if user_id is not None and event.user_id != user_id:
-        raise HTTPException(status_code=404, detail="Event not found or you don't have access")
+        raise HTTPException(status_code=403, detail="Access denied")
 
     # Fetch registrations for the event
     registrations = db.query(EventForm).filter(EventForm.event_id == event_id).all()
-    if not registrations:
-        raise HTTPException(status_code=404, detail="No registrations found for this event")
 
-    return registrations
+    # Ensure registrations exist
+    if not registrations:
+        raise HTTPException(status_code=404, detail="No registrations found")
+
+    # Convert EventForm instances to UserDetails
+    user_details_list = [UserDetails(
+        id=reg.id,
+        name=reg.name,
+        email=reg.email,
+        phoneno=reg.phoneno,
+        dropdown=reg.dropdown
+    ) for reg in registrations]
+
+    return user_details_list
 
 
 @app.get("/view-registrations/{event_id}", response_class=HTMLResponse)
 async def view_registrations(request: Request, event_id: int, db: Session = Depends(get_db)):
-    # Fetch event name for display
+    # Fetch the event details
     event = db.query(Event).filter(Event.id == event_id).first()
     if not event:
         raise HTTPException(status_code=404, detail="Event not found")
@@ -726,7 +732,7 @@ async def view_registrations(request: Request, event_id: int, db: Session = Depe
     # Fetch registrations for the event
     registrations = db.query(EventForm).filter(EventForm.event_id == event_id).all()
 
-    # Render the template with event name and registrations
+    # Render the HTML template with event name and registrations
     return templates.TemplateResponse("event_registrations.html", {
         "request": request,
         "users": registrations,
@@ -735,14 +741,111 @@ async def view_registrations(request: Request, event_id: int, db: Session = Depe
 
 @app.get("/user-event-registrations/{event_id}", response_model=List[UserDetails])
 async def get_user_event_registrations(event_id: int, user_id: int, db: Session = Depends(get_db)):
-    # Verify the event belongs to the user
+    # Ensure the event belongs to the user
     event = db.query(Event).filter(Event.id == event_id, Event.user_id == user_id).first()
     if not event:
-        raise HTTPException(status_code=404, detail="Event not found or you don't have access")
+        raise HTTPException(status_code=404, detail="Event not found or access denied")
 
     # Fetch registrations for the event
     registrations = db.query(EventForm).filter(EventForm.event_id == event_id).all()
+
+    # Check if registrations exist
     if not registrations:
-        raise HTTPException(status_code=404, detail="No registrations found for this event")
+        raise HTTPException(status_code=404, detail="No registrations found")
 
     return registrations
+
+@app.get("/upload-image-form")
+async def upload_image_form(request: Request, db: Session = Depends(get_db)):
+    # Retrieve current user
+    user = get_current_user(request,db)
+
+    if user is None:
+        raise HTTPException(status_code=401, detail="User not authenticated")
+
+    # Retrieve the event_id for the current user
+    event = db.query(Event).filter(Event.user_id == user.id).first()
+
+    if event is None:
+        raise HTTPException(status_code=404, detail="Event not found for the user")
+
+    # Render the form with the event_id
+    return templates.TemplateResponse("upload_image.html", {"request": request, "event_id": event.id})
+
+@app.post("/upload", response_model=ImageResponse)
+async def upload_image(
+    request: Request,
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db)
+):
+    user = get_current_user(request, db)
+
+    if user is None:
+        raise HTTPException(status_code=401, detail="User not authenticated")
+
+    event = db.query(Event).filter(Event.user_id == user.id).first()
+
+    if event is None:
+        raise HTTPException(status_code=404, detail="Event not found for the user")
+
+    if file.content_type not in ["image/jpeg", "image/png", "image/jpg"]:
+        raise HTTPException(status_code=400, detail="Invalid file type. Only jpg, jpeg, and png are allowed.")
+
+    file_data = await file.read()
+
+    existing_image = db.query(ImageModel).filter(ImageModel.event_id == event.id).first()
+
+    if existing_image:
+        existing_image.filename = file.filename
+        existing_image.data = file_data
+        db.commit()
+        db.refresh(existing_image)
+        return existing_image
+    else:
+        new_image = ImageModel(event_id=event.id, filename=file.filename, data=file_data)
+        db.add(new_image)
+        db.commit()
+        db.refresh(new_image)
+        return new_image
+@app.get("/images")
+async def get_image(request: Request,db: Session = Depends(get_db)):
+    user = get_current_user(request,db)
+
+    if user is None:
+        raise HTTPException(status_code=401, detail="User not authenticated")
+
+    event = db.query(Event).filter(Event.user_id == user.id).first()
+
+    if event is None:
+        raise HTTPException(status_code=404, detail="Event not found for the user")
+
+    image = db.query(ImageModel).filter(ImageModel.event_id == event.id).first()
+
+    if image is None:
+        raise HTTPException(status_code=404, detail="Image not found for this event")
+
+    return StreamingResponse(BytesIO(image.data), media_type="image/jpeg")
+@app.get("/display-image", response_class=HTMLResponse)
+async def display_image_page(request: Request, db: Session = Depends(get_db)):
+    # Get the current user
+    current_user = db.query(User).filter(User.id == 1).first()  # Replace with actual logic to get the current user
+
+    if not current_user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    # Get the event ID for the current user
+    event_id = db.query(Event).filter(Event.user_id == current_user.id).first().id
+
+    # Get the image for the event
+    image = db.query(ImageModel).filter(ImageModel.event_id == event_id).first()
+    if image is None:
+        raise HTTPException(status_code=404, detail="Image not found for this event")
+
+    # Pass the image data to the template
+    return templates.TemplateResponse("image_display.html", {
+        "request": request,
+        "image_url": f"/images/{event_id}"
+    })
+@app.get("/thank-you")
+def thank_you():
+    return {"message": "Thank you for your submission!"}

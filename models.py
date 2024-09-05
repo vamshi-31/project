@@ -8,11 +8,10 @@ class User(Base):
     id = Column(Integer, primary_key=True, index=True)
     email = Column(String, unique=True, index=True)
     password = Column(String)
-    is_active = Column(Boolean, default=False)  # Default value for new users
+    is_active = Column(Boolean, default=False)
 
-    # Define relationships
     events = relationship("Event", back_populates="owner")
-    pending_events = relationship("PendingEvent", back_populates="user")  # Relationship to PendingEvent
+    pending_events = relationship("PendingEvent", back_populates="user")
 
 class PendingEvent(Base):
     __tablename__ = "pending_requests"
@@ -41,12 +40,11 @@ class Event(Base):
     delegates = Column(Boolean, default=False)
     speaker = Column(Boolean, default=False)
     nri = Column(Boolean, default=False)
-    user_id = Column(Integer, ForeignKey("users.id"))  # ForeignKey references User table
-    status = Column(String, default="pending")  # Added status to track approval
+    user_id = Column(Integer, ForeignKey("users.id"))
+    status = Column(String, default="pending")
 
-    # Define relationship with User
     owner = relationship("User", back_populates="events")
-    forms = relationship("EventForm", back_populates="event", cascade="all, delete-orphan")  # Added cascade for deletion
+    forms = relationship("EventForm", back_populates="event", cascade="all, delete-orphan")
 
 class EventForm(Base):
     __tablename__ = "registrations"
@@ -57,13 +55,13 @@ class EventForm(Base):
     email = Column(String, index=True)
     phoneno = Column(String)
     dropdown = Column(String)
-    image = Column(LargeBinary)
+    qr_code = Column(LargeBinary)
 
     event = relationship("Event", back_populates="forms")
 
 class ImageModel(Base):
     __tablename__ = "images"
     id = Column(Integer, primary_key=True)
+    event_id = Column(Integer, ForeignKey("events.id"), unique=True, nullable=False)
     filename = Column(String, nullable=False)
     data = Column(LargeBinary, nullable=False)
-
