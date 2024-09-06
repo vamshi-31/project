@@ -1,7 +1,7 @@
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker, declarative_base
 
-DATABASE_URL = "postgresql://goku:12345@3.131.134.37:5432/event_3"  # Updated to match your database name
+DATABASE_URL = "postgresql://goku:12345@3.131.134.37:5432/event_4"  # Updated to match your database name
 
 # DATABASE_URL = "sqlite:///./event.db"
 

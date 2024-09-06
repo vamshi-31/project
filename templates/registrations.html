@@ -1,0 +1,58 @@
+<!-- templates/registrations.html -->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Event Registrations</title>
+    <style>
+        table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+        th, td {
+            padding: 8px;
+            text-align: left;
+            border-bottom: 1px solid #ddd;
+        }
+        th {
+            background-color: #f2f2f2;
+        }
+        tr:hover {
+            background-color: #f5f5f5;
+        }
+    </style>
+</head>
+<body>
+    <h1>Event Registrations</h1>
+    <table>
+        <thead>
+            <tr>
+                <th>ID</th>
+                <th>Name</th>
+                <th>Email</th>
+                <th>Phone Number</th>
+                <th>Dropdown</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% if registrations %}
+                {% for reg in registrations %}
+                <tr>
+                    <td><a href="/event-registrations/{{ event_id }}/registrations/{{ reg.id }}">{{ reg.id }}</a></td>
+                    <td><a href="/event-registrations/{{ event_id }}/registrations/{{ reg.id }}">{{ reg.name }}</a></td>
+                    <td><a href="/event-registrations/{{ event_id }}/registrations/{{ reg.id }}">{{ reg.email }}</a></td>
+                    <td><a href="/event-registrations/{{ event_id }}/registrations/{{ reg.id }}">{{ reg.phoneno }}</a></td>
+                    <td><a href="/event-registrations/{{ event_id }}/registrations/{{ reg.id }}">{{ reg.dropdown }}</a></td>
+                </tr>
+                {% endfor %}
+            {% else %}
+                <tr>
+                    <td colspan="5">No registrations found</td>
+                </tr>
+            {% endif %}
+        </tbody>
+    </table>
+    <a href="/events">Back to Events</a>
+</body>
+</html>

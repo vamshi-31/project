@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>User Details</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 20px;
+        }
+        .container {
+            max-width: 600px;
+            margin: 0 auto;
+            border: 1px solid #ccc;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 0 10px rgba(0, 0, 0, 0.1);
+        }
+        h1 {
+            text-align: center;
+            color: #333;
+        }
+        .details {
+            margin-bottom: 20px;
+        }
+        .details p {
+            margin: 10px 0;
+        }
+        .qr-code {
+            text-align: center;
+        }
+        .qr-code img {
+            max-width: 100%;
+            height: auto;
+        }
+        .back-button {
+            display: block;
+            width: 100px;
+            margin: 20px auto;
+            text-align: center;
+            text-decoration: none;
+            background-color: #007bff;
+            color: white;
+            padding: 10px;
+            border-radius: 5px;
+            font-size: 16px;
+        }
+        .back-button:hover {
+            background-color: #0056b3;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Registration Details</h1>
+        <div class="details">
+            <p><strong>ID:</strong> {{ user_details.id }}</p>
+            <p><strong>Name:</strong> {{ user_details.name }}</p>
+            <p><strong>Email:</strong> {{ user_details.email }}</p>
+            <p><strong>Phone Number:</strong> {{ user_details.phoneno }}</p>
+            <p><strong>Dropdown Selection:</strong> {{ user_details.dropdown }}</p>
+        </div>
+        <div class="qr-code">
+            <h2>QR Code</h2>
+            <img src="{{ qr_code_path }}" alt="QR Code">
+        </div>
+        <a href="/event-registrations/{{ user_details.id }}" class="back-button">Back to Registrations</a>
+    </div>
+</body>
+</html>

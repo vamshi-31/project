@@ -1,5 +1,5 @@
-from fastapi import FastAPI, Form, Request, Depends, HTTPException, BackgroundTasks, UploadFile, File, Query
-from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse
+from fastapi import FastAPI, Form, Request, Depends, HTTPException, BackgroundTasks, UploadFile,Path, File, Query
+from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse, FileResponse
 from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
 from pydantic import BaseModel, EmailStr, constr
@@ -13,6 +13,7 @@ from schemas import UserSchema, EventFormCreate, UserDetails, ImageCreate, Image
 from database import Base
 import smtplib
 import base64
+import io
 from typing import List, Any, Optional
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
@@ -543,21 +544,6 @@ async def reject_event(event_id: int, db: Session = Depends(get_db)):
 
     return RedirectResponse(url="/events", status_code=303)
 
-
-@app.get("/events", response_class=HTMLResponse)
-async def events(request: Request, db: Session = Depends(get_db)):
-    user_email = get_current_user(request)  # Get the current user's email
-    user = db.query(User).filter(User.email == user_email).first()  # Fetch the current user from the database
-
-    if not user:
-        raise HTTPException(status_code=403, detail="User not found")
-
-    # Fetch only approved events belonging to the user
-    user_events = db.query(Event).filter(Event.user_id == user.id).all()
-
-    return templates.TemplateResponse("events.html", {"request": request, "email": user_email, "events": user_events})
-
-
 @app.get("/edit-event", response_class=HTMLResponse)
 async def edit_event(request: Request, db: Session = Depends(get_db)):
     event_id = request.query_params.get("id")
@@ -692,19 +678,55 @@ async def submit_form(
 
     return RedirectResponse(url="/thank-you", status_code=303)
 
-@app.get("/thank-you")
-def thank_you():
-    return {"message": "Thank you for your submission!"}
+
+@app.get("/qr-code/{event_id}/{registration_id}")
+async def get_qr_code(
+    event_id: int = Path(..., description="The ID of the event"),
+    registration_id: int = Path(..., description="The ID of the registration entry"),
+    db: Session = Depends(get_db),
+    current_user_email: str = Depends(get_current_user)
+):
+    # Fetch the user object based on email
+    user = db.query(User).filter(User.email == current_user_email).first()
+    if not user:
+        raise HTTPException(status_code=403, detail="User not found")
+
+    # Fetch the event and the registration entry
+    event = db.query(Event).filter(Event.id == event_id, Event.user_id == user.id).first()
+    form_entry = db.query(EventForm).filter(EventForm.id == registration_id, EventForm.event_id == event_id).first()
+
+    # Check if the event exists and belongs to the current user
+    if not event:
+        raise HTTPException(status_code=403, detail="Access denied: You do not own this event")
+
+    # Check if the registration entry exists and belongs to the correct event
+    if not form_entry or not form_entry.qr_code:
+        raise HTTPException(status_code=404, detail="QR Code not found")
+
+    # Return the QR code image
+    qr_code_data = BytesIO(form_entry.qr_code)
+    return StreamingResponse(qr_code_data, media_type="image/png")
 
 @app.get("/event-registrations/{event_id}", response_model=List[UserDetails])
-async def get_event_registrations(event_id: int, user_id: int = None, db: Session = Depends(get_db)):
+async def get_event_registrations(
+    event_id: int,
+    request: Request,
+    db: Session = Depends(get_db)
+):
+    # Get current user's email
+    user_email = get_current_user(request)
+
     # Fetch the event by ID
     event = db.query(Event).filter(Event.id == event_id).first()
     if not event:
         raise HTTPException(status_code=404, detail="Event not found")
 
-    # Verify user access, if `user_id` is provided
-    if user_id is not None and event.user_id != user_id:
+    # Verify user access by comparing user_id
+    user = db.query(User).filter(User.email == user_email).first()
+    if not user:
+        raise HTTPException(status_code=403, detail="User not found")
+
+    if event.user_id != user.id:
         raise HTTPException(status_code=403, detail="Access denied")
 
     # Fetch registrations for the event
@@ -723,41 +745,77 @@ async def get_event_registrations(event_id: int, user_id: int = None, db: Sessio
         dropdown=reg.dropdown
     ) for reg in registrations]
 
-    return user_details_list
+    return templates.TemplateResponse(
+        "registrations.html",
+        {"request": request, "registrations": user_details_list, "event_id": event_id}
+    )
 
 
-@app.get("/view-registrations/{event_id}", response_class=HTMLResponse)
-async def view_registrations(request: Request, event_id: int, db: Session = Depends(get_db)):
-    # Fetch the event details
+
+@app.get("/event-registrations/{event_id}/registrations/{registration_id}")
+async def get_specific_registration(
+    event_id: int,
+    registration_id: int,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    # Fetch the event by ID
     event = db.query(Event).filter(Event.id == event_id).first()
     if not event:
         raise HTTPException(status_code=404, detail="Event not found")
 
-    # Fetch registrations for the event
-    registrations = db.query(EventForm).filter(EventForm.event_id == event_id).all()
+    # Fetch the current user's email from the session
+    user_email = request.session.get("user_email")
+    if not user_email:
+        raise HTTPException(status_code=403, detail="User not authenticated")
 
-    # Render the HTML template with event name and registrations
-    return templates.TemplateResponse("event_registrations.html", {
-        "request": request,
-        "users": registrations,
-        "event_name": event.event_name
-    })
+    # Fetch the user by email
+    user = db.query(User).filter(User.email == user_email).first()
+    if not user:
+        raise HTTPException(status_code=403, detail="User not found")
 
-@app.get("/user-event-registrations/{event_id}", response_model=List[UserDetails])
-async def get_user_event_registrations(event_id: int, user_id: int, db: Session = Depends(get_db)):
-    # Ensure the event belongs to the user
-    event = db.query(Event).filter(Event.id == event_id, Event.user_id == user_id).first()
-    if not event:
-        raise HTTPException(status_code=404, detail="Event not found or access denied")
+    # Ensure that the user is the owner of the event
+    if event.user_id != user.id:
+        raise HTTPException(status_code=403, detail="Access denied")
 
-    # Fetch registrations for the event
-    registrations = db.query(EventForm).filter(EventForm.event_id == event_id).all()
+    # Fetch the registration by ID
+    registration = db.query(EventForm).filter(
+        EventForm.id == registration_id,
+        EventForm.event_id == event_id
+    ).first()
 
-    # Check if registrations exist
-    if not registrations:
-        raise HTTPException(status_code=404, detail="No registrations found")
+    if not registration:
+        raise HTTPException(status_code=404, detail="Registration not found")
 
-    return registrations
+    # Generate QR code
+    qr_code_path = f"static/qrcodes/{registration_id}.png"
+    qr_code_data = {
+        "id": registration.id,
+        "name": registration.name,
+        "email": registration.email,
+        "phoneno": registration.phoneno,
+        "dropdown": registration.dropdown
+    }
+    generate_qr_code(qr_code_data, qr_code_path)
+
+    # Convert EventForm instance to UserDetails
+    user_details = UserDetails(
+        id=registration.id,
+        name=registration.name,
+        email=registration.email,
+        phoneno=registration.phoneno,
+        dropdown=registration.dropdown
+    )
+
+    return templates.TemplateResponse(
+        "user_details.html",
+        {"request": request, "user_details": user_details, "qr_code_path": qr_code_path}
+    )
+
+
+@app.get("/thank-you")
+def thank_you():
+    return {"message": "Thank you for your submission!"}
 
 def get_current_event_id(request: Request):
     # Assume you get the event_id from the request context or session
@@ -812,5 +870,3 @@ async def get_image(event_id: int, db: Session = Depends(get_db)):
 
     # Return the image content as a streaming response
     return StreamingResponse(BytesIO(image.data), media_type="image/jpeg")
-
-

@@ -52,6 +52,7 @@ class UserDetails(BaseModel):
     name: str
     email: str
     phoneno: str
+    dropdown: str
 
     class Config:
         from_attributes = True
