@@ -2,7 +2,7 @@
 <html lang="en">
 <body>
 <form action="/submit-form" method="post">
-    <input type="hidden" name="event_id" value="{{ event_id }}">
+    <input type="hidden" name="token" value="{{ token }}">
     <label for="name">Name:</label>
     <input type="text" name="name" required><br>
     <label for="email">Email:</label>
@@ -18,8 +18,5 @@
     </select><br>
     <input type="submit" value="Submit">
 </form>
-
-<body>
-
 </body>
 </html>

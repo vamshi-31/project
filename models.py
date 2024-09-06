@@ -1,6 +1,8 @@
-from sqlalchemy import Column, Integer, String, Boolean, Date, ForeignKey, LargeBinary
+from sqlalchemy import Column, Integer, String, Boolean, Date, ForeignKey
+from sqlalchemy.dialects.postgresql import BYTEA
 from sqlalchemy.orm import relationship
 from database import Base
+import uuid
 
 class User(Base):
     __tablename__ = "users"
@@ -26,6 +28,7 @@ class PendingEvent(Base):
     nri = Column(Boolean, default=False)
     user_id = Column(Integer, ForeignKey('users.id'))
     status = Column(String, default="pending")
+    token = Column(String, unique=True, default=lambda: str(uuid.uuid4()))  # Add this line
 
     user = relationship("User", back_populates="pending_events")
 
@@ -42,9 +45,11 @@ class Event(Base):
     nri = Column(Boolean, default=False)
     user_id = Column(Integer, ForeignKey("users.id"))
     status = Column(String, default="pending")
+    token = Column(String, unique=True, index=True)  # Token column
 
     owner = relationship("User", back_populates="events")
     forms = relationship("EventForm", back_populates="event", cascade="all, delete-orphan")
+
 
 class EventForm(Base):
     __tablename__ = "registrations"
@@ -55,7 +60,7 @@ class EventForm(Base):
     email = Column(String, index=True)
     phoneno = Column(String)
     dropdown = Column(String)
-    qr_code = Column(LargeBinary)
+    qr_code = Column(BYTEA)
 
     event = relationship("Event", back_populates="forms")
 
@@ -64,4 +69,4 @@ class ImageModel(Base):
     id = Column(Integer, primary_key=True)
     event_id = Column(Integer, ForeignKey("events.id"), unique=True, nullable=False)
     filename = Column(String, nullable=False)
-    data = Column(LargeBinary, nullable=False)
+    data = Column(BYTEA, nullable=False)

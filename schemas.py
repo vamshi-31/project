@@ -1,5 +1,5 @@
 from pydantic import BaseModel
-from typing import Optional, List
+from typing import Optional
 from enum import Enum
 
 class EventStatusEnum(str, Enum):
@@ -28,7 +28,7 @@ class EventCreate(BaseModel):
 
 class EventResponse(EventCreate):
     id: int
-    user_id: int
+    token: str  # Add this field to include the event token
 
     class Config:
         from_attributes = True
@@ -39,7 +39,7 @@ class EventFormCreate(BaseModel):
     email: str
     phoneno: str
     dropdown: str
-    qr_code: str  # Ensure that this remains a string (hex or base64 encoded)
+    qr_code: str  # Ensure this is a string (hex or base64 encoded)
 
 class EventFormResponse(EventFormCreate):
     id: int
@@ -62,7 +62,6 @@ class ImageBase(BaseModel):
 
 class ImageCreate(ImageBase):
     data: bytes
-
 
 class ImageResponse(BaseModel):
     id: int

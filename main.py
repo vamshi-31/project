@@ -1,4 +1,4 @@
-from fastapi import FastAPI, Form, Request, Depends, HTTPException, BackgroundTasks, UploadFile, File
+from fastapi import FastAPI, Form, Request, Depends, HTTPException, BackgroundTasks, UploadFile, File, Query
 from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse
 from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
@@ -26,6 +26,9 @@ from datetime import datetime
 import qrcode
 from io import BytesIO
 import json
+import uuid
+import secrets
+
 
 app = FastAPI()
 
@@ -54,6 +57,11 @@ conf = ConnectionConfig(
     VALIDATE_CERTS=False
 )
 
+
+def generate_unique_token() -> str:
+    # Generate a secure random token
+    return secrets.token_urlsafe(32)  # Adjust the length as needed
+
 async def send_form_creation_link_email(user_email: EmailStr, form_creation_url: str):
     message = MessageSchema(
         subject="Event Approved - Create Form",
@@ -67,7 +75,6 @@ async def send_form_creation_link_email(user_email: EmailStr, form_creation_url:
     except Exception as e:
         print(f"Error sending email: {e}")
         raise HTTPException(status_code=500, detail="Could not send email.")
-
 
 
 class EmailSettings(BaseModel):
@@ -438,6 +445,10 @@ async def create_event_post(
     except ValueError:
         raise HTTPException(status_code=400, detail="Invalid date format. Use YYYY-MM-DD format.")
 
+    # Generate a unique token for the event
+    unique_token = str(uuid.uuid4())
+
+    # Create a new pending event with the generated token
     new_pending_event = PendingEvent(
         event_name=event_name,
         venue_address=venue_address,
@@ -446,14 +457,17 @@ async def create_event_post(
         delegates=delegates,
         speaker=speaker,
         nri=nri,
-        user_id=user.id
+        user_id=user.id,
+        token=unique_token  # Add the token field here
     )
     db.add(new_pending_event)
     db.commit()
     db.refresh(new_pending_event)
+
     admin_email = "bodavamshikrishna30@gmail.com"
 
     try:
+        # Send an email to the admin for event approval
         await send_event_request_email(new_pending_event, admin_email)
     except Exception as e:
         db.rollback()
@@ -477,13 +491,13 @@ async def events(request: Request, db: Session = Depends(get_db)):
 
 @app.post("/approve-event/{event_id}")
 async def approve_event(event_id: int, db: Session = Depends(get_db)):
-    # Fetch the event from the pending_requests table
     pending_event = db.query(PendingEvent).filter(PendingEvent.id == event_id).first()
 
     if not pending_event:
         raise HTTPException(status_code=404, detail="Event not found in pending requests")
 
-    # Create a new event in the events table
+    token = generate_unique_token()  # Generate a unique token
+
     approved_event = Event(
         event_name=pending_event.event_name,
         venue_address=pending_event.venue_address,
@@ -493,32 +507,23 @@ async def approve_event(event_id: int, db: Session = Depends(get_db)):
         speaker=pending_event.speaker,
         nri=pending_event.nri,
         user_id=pending_event.user_id,
-        status="approved"  # Status set to 'approved'
+        status="approved",
+        token=token
     )
 
-    # Add the event to the events table
     db.add(approved_event)
-    db.commit()
-
-    # Remove the event from the pending_requests table
     db.delete(pending_event)
     db.commit()
 
-    # Fetch the user who created the event
     user = db.query(User).filter(User.id == approved_event.user_id).first()
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
 
-    # Generate the form creation URL
-    form_creation_url = f"http://localhost:8000/create-form/{approved_event.id}"
-
-    # Notify the user about the approval and provide a link to create a form
-    user_email = user.email
+    form_creation_url = f"http://localhost:8000/create-form?token={token}"
 
     try:
-        await send_form_creation_link_email(user_email, form_creation_url)
+        await send_form_creation_link_email(user.email, form_creation_url)
     except Exception as e:
-        # Handle email sending errors if needed
         raise HTTPException(status_code=500, detail=f"Could not send email. Error: {e}")
 
     return {"message": "Event approved and notification sent to the user!"}
@@ -625,44 +630,45 @@ async def delete_event(
     db.commit()
     return RedirectResponse(url="/events", status_code=303)
 
-@app.get("/create-form/{event_id}", response_class=HTMLResponse)
-async def create_form(event_id: int, request: Request, db: Session = Depends(get_db)):
-    # Retrieve the event to validate the ID
-    event = db.query(Event).filter(Event.id == event_id).first()
+
+@app.get("/create-form")
+async def create_form(request: Request, token: str, db: Session = Depends(get_db)):
+    event = db.query(Event).filter(Event.token == token).first()
 
     if not event:
         raise HTTPException(status_code=404, detail="Event not found")
 
-    return templates.TemplateResponse("create_form.html", {"request": request, "event_id": event_id})
+    return templates.TemplateResponse(
+        "create_form.html",
+        {"request": request, "event_id": event.id, "token": token}
+    )
 
 @app.post("/submit-form")
 async def submit_form(
         request: Request,
-        event_id: int = Form(...),
+        token: str = Form(...),
         name: str = Form(...),
         email: str = Form(...),
         phoneno: str = Form(...),
         dropdown: str = Form(...),
         db: Session = Depends(get_db)
 ):
-    # Check if the event exists
-    event = db.query(Event).filter(Event.id == event_id).first()
+    event = db.query(Event).filter(Event.token == token).first()
+
     if not event:
         raise HTTPException(status_code=404, detail="Event not found")
 
-    # Create new form entry
     new_form_entry = EventForm(
-        event_id=event_id,
+        event_id=event.id,
         name=name,
         email=email,
         phoneno=phoneno,
         dropdown=dropdown,
-        qr_code=None  # Initialize with None
+        qr_code=None
     )
     db.add(new_form_entry)
-    db.commit()  # Commit to get the form ID
+    db.commit()
 
-    # Prepare data for QR code generation
     user_data = {
         'name': name,
         'email': email,
@@ -674,13 +680,11 @@ async def submit_form(
     try:
         generate_qr_code(user_data, qr_code_path)
 
-        # Read the image file as binary
         with open(qr_code_path, "rb") as image_file:
             qr_code_binary = image_file.read()
 
-        # Update the form entry with QR code binary data
         new_form_entry.qr_code = qr_code_binary
-        db.commit()  # Commit the update
+        db.commit()
 
     except Exception as e:
         db.rollback()
